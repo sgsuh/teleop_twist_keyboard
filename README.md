@@ -12,6 +12,27 @@ Publishing to a different topic (in this case `my_cmd_vel`).
 ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args --remap cmd_vel:=my_cmd_vel
 ```
 
+## Docker (ROS 2 Jazzy)
+
+Build the image from the repository root:
+```sh
+docker build -f docker/Dockerfile -t teleop_twist_keyboard:jazzy .
+```
+
+Run the node. `-it` is required because the node reads keypresses from the terminal,
+and `--network host` lets it talk to ROS 2 nodes on the host or in other containers.
+```sh
+docker run --rm -it --network host teleop_twist_keyboard:jazzy
+```
+
+Pass extra arguments by overriding the command, e.g. to remap the topic:
+```sh
+docker run --rm -it --network host teleop_twist_keyboard:jazzy \
+  ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args --remap cmd_vel:=my_cmd_vel
+```
+
+Set `-e ROS_DOMAIN_ID=<id>` if your other nodes use a non-default domain.
+
 ## Usage
 
 ```
