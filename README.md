@@ -71,3 +71,5 @@ CTRL-C to quit
   - The speed the node starts with by default.
 - `turn (double, default: 1.0)`
   - The turn rate (rad/s) the node starts with by default.
+- `publish_rate (double, default: 20.0)`
+  - Rate (Hz) at which the latest command is republished, so the robot keeps moving while no key is pressed. Set to `0.0` to publish only on keypress.

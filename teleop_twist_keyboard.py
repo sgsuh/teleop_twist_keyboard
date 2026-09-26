@@ -144,9 +144,13 @@ def main():
     frame_id = node.declare_parameter('frame_id', '', read_only_descriptor).value
     speed = node.declare_parameter('speed', 0.5, read_only_descriptor).value
     turn = node.declare_parameter('turn', 1.0, read_only_descriptor).value
+    publish_rate = node.declare_parameter('publish_rate', 20.0, read_only_descriptor).value
 
     if not stamped and frame_id:
         raise Exception("'frame_id' can only be set when 'stamped' is True")
+
+    if publish_rate < 0.0:
+        raise Exception("'publish_rate' must be non-negative")
 
     if stamped:
         TwistMsg = geometry_msgs.msg.TwistStamped
@@ -154,9 +158,6 @@ def main():
         TwistMsg = geometry_msgs.msg.Twist
 
     pub = node.create_publisher(TwistMsg, 'cmd_vel', 10)
-
-    spinner = threading.Thread(target=rclpy.spin, args=(node,))
-    spinner.start()
 
     x = 0.0
     y = 0.0
@@ -168,10 +169,31 @@ def main():
 
     if stamped:
         twist = twist_msg.twist
-        twist_msg.header.stamp = node.get_clock().now().to_msg()
         twist_msg.header.frame_id = frame_id
     else:
         twist = twist_msg
+
+    # The keyboard loop and the publish timer (running in the spinner thread)
+    # both touch twist_msg, so guard it with a lock.
+    lock = threading.Lock()
+
+    def publish():
+        if stamped:
+            twist_msg.header.stamp = node.get_clock().now().to_msg()
+        pub.publish(twist_msg)
+
+    def on_timer():
+        with lock:
+            publish()
+
+    # Republish the latest command at a fixed rate so that the robot keeps
+    # moving while no key is pressed. A rate of 0 publishes on keypress only.
+    timer = None
+    if publish_rate > 0.0:
+        timer = node.create_timer(1.0 / publish_rate, on_timer)
+
+    spinner = threading.Thread(target=rclpy.spin, args=(node,))
+    spinner.start()
 
     try:
         print(msg)
@@ -199,31 +221,32 @@ def main():
                 if (key == '\x03'):
                     break
 
-            if stamped:
-                twist_msg.header.stamp = node.get_clock().now().to_msg()
-
-            twist.linear.x = x * speed
-            twist.linear.y = y * speed
-            twist.linear.z = z * speed
-            twist.angular.x = 0.0
-            twist.angular.y = 0.0
-            twist.angular.z = th * turn
-            pub.publish(twist_msg)
+            with lock:
+                twist.linear.x = x * speed
+                twist.linear.y = y * speed
+                twist.linear.z = z * speed
+                twist.angular.x = 0.0
+                twist.angular.y = 0.0
+                twist.angular.z = th * turn
+                publish()
 
     except Exception as e:
         print(e)
 
     finally:
-        if stamped:
-            twist_msg.header.stamp = node.get_clock().now().to_msg()
+        # Stop the timer first so it cannot republish a stale command after
+        # the final stop message.
+        with lock:
+            if timer is not None:
+                timer.cancel()
 
-        twist.linear.x = 0.0
-        twist.linear.y = 0.0
-        twist.linear.z = 0.0
-        twist.angular.x = 0.0
-        twist.angular.y = 0.0
-        twist.angular.z = 0.0
-        pub.publish(twist_msg)
+            twist.linear.x = 0.0
+            twist.linear.y = 0.0
+            twist.linear.z = 0.0
+            twist.angular.x = 0.0
+            twist.angular.y = 0.0
+            twist.angular.z = 0.0
+            publish()
         rclpy.shutdown()
         spinner.join()
 
