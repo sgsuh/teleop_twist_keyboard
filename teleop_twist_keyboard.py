@@ -33,6 +33,7 @@
 
 import sys
 import threading
+import time
 
 import geometry_msgs.msg
 import rcl_interfaces.msg
@@ -64,6 +65,9 @@ t : up (+z)
 b : down (-z)
 
 anything else : stop
+
+Hold a movement key to keep moving; the robot stops when the key is
+released (after 'key_timeout' seconds without a keypress).
 
 q/z : increase/decrease max speeds by 10%
 w/x : increase/decrease only linear speed by 10%
@@ -145,12 +149,16 @@ def main():
     speed = node.declare_parameter('speed', 0.5, read_only_descriptor).value
     turn = node.declare_parameter('turn', 1.0, read_only_descriptor).value
     publish_rate = node.declare_parameter('publish_rate', 20.0, read_only_descriptor).value
+    key_timeout = node.declare_parameter('key_timeout', 0.6, read_only_descriptor).value
 
     if not stamped and frame_id:
         raise Exception("'frame_id' can only be set when 'stamped' is True")
 
     if publish_rate < 0.0:
         raise Exception("'publish_rate' must be non-negative")
+
+    if key_timeout < 0.0:
+        raise Exception("'key_timeout' must be non-negative")
 
     if stamped:
         TwistMsg = geometry_msgs.msg.TwistStamped
@@ -164,6 +172,7 @@ def main():
     z = 0.0
     th = 0.0
     status = 0.0
+    last_key_time = time.monotonic()
 
     twist_msg = TwistMsg()
 
@@ -173,9 +182,17 @@ def main():
     else:
         twist = twist_msg
 
-    # The keyboard loop and the publish timer (running in the spinner thread)
-    # both touch twist_msg, so guard it with a lock.
+    # The keyboard loop and the timer (running in the spinner thread) both
+    # touch the motion state and twist_msg, so guard them with a lock.
     lock = threading.Lock()
+
+    def update_twist():
+        twist.linear.x = x * speed
+        twist.linear.y = y * speed
+        twist.linear.z = z * speed
+        twist.angular.x = 0.0
+        twist.angular.y = 0.0
+        twist.angular.z = th * turn
 
     def publish():
         if stamped:
@@ -183,14 +200,30 @@ def main():
         pub.publish(twist_msg)
 
     def on_timer():
+        nonlocal x, y, z, th
         with lock:
-            publish()
+            # Deadman: stop if no key has arrived within key_timeout, e.g.
+            # the key was released or the terminal session froze.
+            timed_out = (key_timeout > 0.0 and
+                         time.monotonic() - last_key_time > key_timeout and
+                         (x, y, z, th) != (0.0, 0.0, 0.0, 0.0))
+            if timed_out:
+                x = 0.0
+                y = 0.0
+                z = 0.0
+                th = 0.0
+                update_twist()
+            if publish_rate > 0.0 or timed_out:
+                publish()
 
     # Republish the latest command at a fixed rate so that the robot keeps
-    # moving while no key is pressed. A rate of 0 publishes on keypress only.
+    # moving while a key is held. A rate of 0 publishes on keypress only
+    # (plus a single stop message when key_timeout expires).
     timer = None
     if publish_rate > 0.0:
         timer = node.create_timer(1.0 / publish_rate, on_timer)
+    elif key_timeout > 0.0:
+        timer = node.create_timer(0.05, on_timer)
 
     spinner = threading.Thread(target=rclpy.spin, args=(node,))
     spinner.start()
@@ -200,34 +233,30 @@ def main():
         print(vels(speed, turn))
         while True:
             key = getKey(settings)
-            if key in moveBindings.keys():
-                x = moveBindings[key][0]
-                y = moveBindings[key][1]
-                z = moveBindings[key][2]
-                th = moveBindings[key][3]
-            elif key in speedBindings.keys():
-                speed = speed * speedBindings[key][0]
-                turn = turn * speedBindings[key][1]
-
-                print(vels(speed, turn))
-                if (status == 14):
-                    print(msg)
-                status = (status + 1) % 15
-            else:
-                x = 0.0
-                y = 0.0
-                z = 0.0
-                th = 0.0
-                if (key == '\x03'):
-                    break
-
             with lock:
-                twist.linear.x = x * speed
-                twist.linear.y = y * speed
-                twist.linear.z = z * speed
-                twist.angular.x = 0.0
-                twist.angular.y = 0.0
-                twist.angular.z = th * turn
+                last_key_time = time.monotonic()
+                if key in moveBindings.keys():
+                    x = moveBindings[key][0]
+                    y = moveBindings[key][1]
+                    z = moveBindings[key][2]
+                    th = moveBindings[key][3]
+                elif key in speedBindings.keys():
+                    speed = speed * speedBindings[key][0]
+                    turn = turn * speedBindings[key][1]
+
+                    print(vels(speed, turn))
+                    if (status == 14):
+                        print(msg)
+                    status = (status + 1) % 15
+                else:
+                    x = 0.0
+                    y = 0.0
+                    z = 0.0
+                    th = 0.0
+                    if (key == '\x03'):
+                        break
+
+                update_twist()
                 publish()
 
     except Exception as e:
@@ -240,12 +269,11 @@ def main():
             if timer is not None:
                 timer.cancel()
 
-            twist.linear.x = 0.0
-            twist.linear.y = 0.0
-            twist.linear.z = 0.0
-            twist.angular.x = 0.0
-            twist.angular.y = 0.0
-            twist.angular.z = 0.0
+            x = 0.0
+            y = 0.0
+            z = 0.0
+            th = 0.0
+            update_twist()
             publish()
         rclpy.shutdown()
         spinner.join()

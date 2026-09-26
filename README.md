@@ -55,6 +55,9 @@ b : down (-z)
 
 anything else : stop
 
+Hold a movement key to keep moving; the robot stops when the key is
+released (after 'key_timeout' seconds without a keypress).
+
 q/z : increase/decrease max speeds by 10%
 w/x : increase/decrease only linear speed by 10%
 e/c : increase/decrease only angular speed by 10%
@@ -72,4 +75,6 @@ CTRL-C to quit
 - `turn (double, default: 1.0)`
   - The turn rate (rad/s) the node starts with by default.
 - `publish_rate (double, default: 20.0)`
-  - Rate (Hz) at which the latest command is republished, so the robot keeps moving while no key is pressed. Set to `0.0` to publish only on keypress.
+  - Rate (Hz) at which the latest command is republished, so the robot keeps moving while a key is held. Set to `0.0` to publish only on keypress.
+- `key_timeout (double, default: 0.6)`
+  - Deadman timeout (seconds). If no key is received for this long, a stop command is published. Holding a key relies on the terminal's key auto-repeat, so this should be longer than the auto-repeat delay. Set to `0.0` to keep moving until a stop key is pressed.
